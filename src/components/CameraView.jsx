@@ -18,6 +18,8 @@ const CameraView = ({ lang, onIntroEnd }) => {
     // Map of class name -> { count, lastSeen, lastAnnounced, lastData }
     const detectionHistoryRef = useRef(new Map());
     const hasSpokenIntroRef = useRef(false);
+    const lastDetectionTimeRef = useRef(0);
+    const detectionFrameSkip = 180; // Run AI roughly 5-6 times per second to save battery/CPU
 
     useEffect(() => {
         langRef.current = lang;
@@ -35,8 +37,8 @@ const CameraView = ({ lang, onIntroEnd }) => {
                 const loadedModel = await cocossd.load({ base: 'lite_mobilenet_v2' });
                 setModel(loadedModel);
 
-                // Warm-up prediction to speed up first real detection
-                const dummy = tf.zeros([1, 300, 300, 3]);
+                // Warm-up prediction (Smaller size for faster load on mobile)
+                const dummy = tf.zeros([1, 160, 160, 3]);
                 await loadedModel.detect(dummy);
                 dummy.dispose();
                 console.log("AI Model warmed up and ready.");
@@ -67,12 +69,9 @@ const CameraView = ({ lang, onIntroEnd }) => {
             }
 
             const constraintOptions = [
-                // Priority 1: High quality back camera
-                { video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
-                // Priority 2: Generic back camera
-                { video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
-                // Priority 3: Any camera
-                { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                // Use slightly lower resolution (480x360) for much faster processing on mobile
+                { video: { facingMode: 'environment', width: { ideal: 480 }, height: { ideal: 360 } }, audio: false },
+                { video: { width: { ideal: 480 }, height: { ideal: 360 } }, audio: false },
                 { video: true, audio: false }
             ];
 
@@ -121,6 +120,9 @@ const CameraView = ({ lang, onIntroEnd }) => {
         if (!model || !videoRef.current || !canvasRef.current) return;
 
         // Ensure video is ready and playing
+        const now = Date.now();
+        const shouldRunInference = now - lastDetectionTimeRef.current >= detectionFrameSkip;
+
         if (videoRef.current.readyState < 2 || videoRef.current.paused) {
             requestAnimationFrame(detect);
             return;
@@ -130,17 +132,25 @@ const CameraView = ({ lang, onIntroEnd }) => {
             const video = videoRef.current;
             const videoWidth = video.videoWidth;
             const videoHeight = video.videoHeight;
-
-            // Sync buffer sizes
-            if (video.width !== videoWidth) video.width = videoWidth;
-            if (video.height !== videoHeight) video.height = videoHeight;
-            if (canvasRef.current.width !== videoWidth) canvasRef.current.width = videoWidth;
-            if (canvasRef.current.height !== videoHeight) canvasRef.current.height = videoHeight;
-
-            // 1. GET DETECTIONS
-            const detections = await model.detect(video);
             const ctx = canvasRef.current.getContext('2d', { alpha: true });
+
+            if (canvasRef.current.width !== videoWidth) {
+                canvasRef.current.width = videoWidth;
+                canvasRef.current.height = videoHeight;
+            }
+
+            // Always clear for smooth frame drawing
             ctx.clearRect(0, 0, videoWidth, videoHeight);
+
+            let detections = [];
+            if (shouldRunInference) {
+                detections = await model.detect(video);
+                lastDetectionTimeRef.current = now;
+                canvasRef.current._lastDetections = detections;
+            } else {
+                // Reuse last detections to avoid flicker while inference is skipped
+                detections = canvasRef.current._lastDetections || [];
+            }
 
             const currentTime = Date.now();
             const currentDetectionsInFrame = new Map();
@@ -153,19 +163,21 @@ const CameraView = ({ lang, onIntroEnd }) => {
             };
 
             let brightness = 0;
-            try {
-                const tempCanvas = document.createElement('canvas');
-                tempCanvas.width = 50; tempCanvas.height = 50;
-                const tempCtx = tempCanvas.getContext('2d');
-                tempCtx.drawImage(video, 0, 0, 50, 50);
-                const imageData = tempCtx.getImageData(0, 0, 50, 50);
-                for (let i = 0; i < imageData.data.length; i += 4) {
-                    brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
+            if (shouldRunInference) {
+                try {
+                    const tempCanvas = document.createElement('canvas');
+                    tempCanvas.width = 40; tempCanvas.height = 40;
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCtx.drawImage(video, 0, 0, 40, 40);
+                    const imageData = tempCtx.getImageData(0, 0, 40, 40);
+                    for (let i = 0; i < imageData.data.length; i += 4) {
+                        brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
+                    }
+                    brightness /= 1600;
+                    setIsLowLight(brightness < 35);
+                } catch (err) {
+                    console.warn("Lighting check failed", err);
                 }
-                brightness /= 2500;
-                setIsLowLight(brightness < 40);
-            } catch (err) {
-                console.warn("Lighting check failed", err);
             }
 
             // 2. PROCESS EVERY DETECTION

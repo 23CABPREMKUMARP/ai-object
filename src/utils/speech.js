@@ -64,7 +64,7 @@ export const speak = (text, lang = 'en-US', priority = 'normal', onEnd = null) =
         const utterance = new SpeechSynthesisUtterance(finalText);
         utterance.voice = selectedVoice;
         utterance.lang = selectedVoice ? selectedVoice.lang : finalLang;
-        utterance.rate = 0.95;
+        utterance.rate = 1.05; // Slightly faster for better UX
         utterance.pitch = 1.0;
 
         currentUtterance = utterance;
