@@ -9,11 +9,6 @@
   --glass-border: rgba(255, 31, 31, 0.2);
   --font-main: 'Outfit', sans-serif;
   --accent-glow: 0 0 40px rgba(255, 31, 31, 0.35);
-
-  /* Layout Variables for easy mobile override */
-  --hud-spacing: 40px;
-  --logo-size: 140px;
-  --hero-scale: 1;
 }
 
 * {
@@ -112,32 +107,32 @@ body {
 }
 
 .top-left {
-  top: var(--hud-spacing);
-  left: var(--hud-spacing);
+  top: 40px;
+  left: 40px;
   border-right: 0;
   border-bottom: 0;
   border-top-left-radius: 15px;
 }
 
 .top-right {
-  top: var(--hud-spacing);
-  right: var(--hud-spacing);
+  top: 40px;
+  right: 40px;
   border-left: 0;
   border-bottom: 0;
   border-top-right-radius: 15px;
 }
 
 .bottom-left {
-  bottom: var(--hud-spacing);
-  left: var(--hud-spacing);
+  bottom: 40px;
+  left: 40px;
   border-right: 0;
   border-top: 0;
   border-bottom-left-radius: 15px;
 }
 
 .bottom-right {
-  bottom: var(--hud-spacing);
-  right: var(--hud-spacing);
+  bottom: 40px;
+  right: 40px;
   border-left: 0;
   border-top: 0;
   border-bottom-right-radius: 15px;
@@ -257,7 +252,7 @@ h3 {
 .logo-container {
   position: absolute;
   top: 5px;
-  right: var(--hud-spacing);
+  right: 40px;
   z-index: 1000;
   display: flex;
   flex-direction: column;
@@ -266,8 +261,8 @@ h3 {
 }
 
 .logo-img {
-  width: var(--logo-size);
-  height: var(--logo-size);
+  width: 140px;
+  height: 140px;
   object-fit: contain;
   filter: drop-shadow(0 0 15px var(--primary-glow));
   cursor: default;
@@ -316,7 +311,7 @@ h3 {
   position: absolute;
   top: 45%;
   left: 50%;
-  transform: translate(-50%, -50%) scale(var(--hero-scale));
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -455,49 +450,5 @@ h3 {
 
   50% {
     opacity: 0.9;
-  }
-}
-
-/* Mobile Optimizations */
-@media (max-width: 768px) {
-  :root {
-    --hud-spacing: 20px;
-    --logo-size: 100px;
-    --hero-scale: 0.8;
-  }
-
-  .btn-large {
-    padding: 1rem 1.5rem;
-    font-size: 0.9rem;
-    border-radius: 1.25rem;
-  }
-
-  .intro-logo-container {
-    width: 220px;
-    height: 220px;
-  }
-
-  .intro-text {
-    margin-top: 40px;
-    font-size: 0.75rem;
-    letter-spacing: 0.25em;
-  }
-
-  .intro-logo-container img {
-    width: 120px !important;
-    height: 120px !important;
-  }
-}
-
-@media (max-width: 480px) {
-  :root {
-    --hud-spacing: 15px;
-    --logo-size: 85px;
-    --hero-scale: 0.7;
-  }
-
-  .status-active {
-    font-size: 0.75rem;
-    letter-spacing: 0.15em;
   }
 }

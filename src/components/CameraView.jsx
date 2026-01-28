@@ -18,8 +18,6 @@ const CameraView = ({ lang, onIntroEnd }) => {
     // Map of class name -> { count, lastSeen, lastAnnounced, lastData }
     const detectionHistoryRef = useRef(new Map());
     const hasSpokenIntroRef = useRef(false);
-    const lastDetectionTimeRef = useRef(0);
-    const detectionFrameSkip = 180; // Run AI roughly 5-6 times per second to save battery/CPU
 
     useEffect(() => {
         langRef.current = lang;
@@ -30,18 +28,24 @@ const CameraView = ({ lang, onIntroEnd }) => {
         const loadModel = async () => {
             try {
                 await tf.ready();
+                // Set backend to webgl for maximum speed, then load model
                 if (tf.getBackend() !== 'webgl') {
                     await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
                 }
                 const loadedModel = await cocossd.load({ base: 'lite_mobilenet_v2' });
                 setModel(loadedModel);
-                console.log("AI ready.");
+
+                // Warm-up prediction to speed up first real detection
+                const dummy = tf.zeros([1, 300, 300, 3]);
+                await loadedModel.detect(dummy);
+                dummy.dispose();
+                console.log("AI Model warmed up and ready.");
             } catch (err) {
-                console.error("Model error:", err);
+                console.error("Failed to load model:", err);
             }
         };
         loadModel();
-    }, []);
+    }, []); // Only load model once
 
     useEffect(() => {
         if (model && !hasSpokenIntroRef.current) {
@@ -56,9 +60,15 @@ const CameraView = ({ lang, onIntroEnd }) => {
         const startCamera = async () => {
             if (!videoRef.current) return;
 
-            // Simplified constraints for ultra-fast startup
+            // Check for Secure Context (Required for camera)
+            if (!window.isSecureContext && window.location.hostname !== 'localhost') {
+                setCameraError("Secure context (HTTPS) required for camera access.");
+                return;
+            }
+
             const constraintOptions = [
-                { video: { facingMode: 'environment', width: 480, height: 360 }, audio: false },
+                { video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+                { video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
                 { video: true, audio: false }
             ];
 
@@ -67,16 +77,16 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     const stream = await navigator.mediaDevices.getUserMedia(options);
                     if (videoRef.current) {
                         videoRef.current.srcObject = stream;
-                        // Fast play
-                        videoRef.current.play().catch(e => console.warn("Autoplay wait", e));
+                        await videoRef.current.play();
                         setCameraError(null);
+                        console.log("Camera started successfully");
                         return;
                     }
                 } catch (err) {
-                    console.warn("Cam retry", options, err.name);
+                    console.warn(`Failed with options:`, options, err);
                 }
             }
-            setCameraError("Camera failed. Check permissions & HTTPS.");
+            setCameraError("Camera access denied. Please enable camera in settings.");
         };
 
         startCamera();
@@ -90,40 +100,20 @@ const CameraView = ({ lang, onIntroEnd }) => {
     }, []);
 
     const detect = useCallback(async () => {
-        if (!model || !videoRef.current || !canvasRef.current) return;
-
-        // Ensure video is ready and playing
-        const now = Date.now();
-        const shouldRunInference = now - lastDetectionTimeRef.current >= detectionFrameSkip;
-
-        if (videoRef.current.readyState < 2 || videoRef.current.paused) {
-            requestAnimationFrame(detect);
-            return;
-        }
-
-        try {
+        if (model && videoRef.current && videoRef.current.readyState === 4) {
             const video = videoRef.current;
             const videoWidth = video.videoWidth;
             const videoHeight = video.videoHeight;
-            const ctx = canvasRef.current.getContext('2d', { alpha: true });
 
-            if (canvasRef.current.width !== videoWidth) {
-                canvasRef.current.width = videoWidth;
-                canvasRef.current.height = videoHeight;
-            }
+            videoRef.current.width = videoWidth;
+            videoRef.current.height = videoHeight;
+            canvasRef.current.width = videoWidth;
+            canvasRef.current.height = videoHeight;
 
-            // Always clear for smooth frame drawing
+            // 1. GET DETECTIONS WITH LOW CONFIDENCE TOLERANCE
+            const detections = await model.detect(video);
+            const ctx = canvasRef.current.getContext('2d');
             ctx.clearRect(0, 0, videoWidth, videoHeight);
-
-            let detections = [];
-            if (shouldRunInference) {
-                detections = await model.detect(video);
-                lastDetectionTimeRef.current = now;
-                canvasRef.current._lastDetections = detections;
-            } else {
-                // Reuse last detections to avoid flicker while inference is skipped
-                detections = canvasRef.current._lastDetections || [];
-            }
 
             const currentTime = Date.now();
             const currentDetectionsInFrame = new Map();
@@ -136,21 +126,19 @@ const CameraView = ({ lang, onIntroEnd }) => {
             };
 
             let brightness = 0;
-            if (shouldRunInference) {
-                try {
-                    const tempCanvas = document.createElement('canvas');
-                    tempCanvas.width = 40; tempCanvas.height = 40;
-                    const tempCtx = tempCanvas.getContext('2d');
-                    tempCtx.drawImage(video, 0, 0, 40, 40);
-                    const imageData = tempCtx.getImageData(0, 0, 40, 40);
-                    for (let i = 0; i < imageData.data.length; i += 4) {
-                        brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
-                    }
-                    brightness /= 1600;
-                    setIsLowLight(brightness < 35);
-                } catch (err) {
-                    console.warn("Lighting check failed", err);
+            try {
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = 50; tempCanvas.height = 50;
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCtx.drawImage(video, 0, 0, 50, 50);
+                const imageData = tempCtx.getImageData(0, 0, 50, 50);
+                for (let i = 0; i < imageData.data.length; i += 4) {
+                    brightness += (imageData.data[i] + imageData.data[i + 1] + imageData.data[i + 2]) / 3;
                 }
+                brightness /= 2500;
+                setIsLowLight(brightness < 40);
+            } catch (err) {
+                console.warn("Lighting check failed", err);
             }
 
             // 2. PROCESS EVERY DETECTION
@@ -179,15 +167,6 @@ const CameraView = ({ lang, onIntroEnd }) => {
                 const centerY = y + height / 2;
                 const areaRatio = (width * height) / (videoWidth * videoHeight);
 
-                // Horizontal Positioning (5 Zones for precision)
-                const relX = (x + width / 2) / videoWidth;
-                let zone = "";
-                if (relX < 0.2) zone = currentLang === 'ta' ? "மிகவும் இடப்பக்கம்" : "far left";
-                else if (relX < 0.4) zone = currentLang === 'ta' ? "இடப்பக்கம்" : "left";
-                else if (relX < 0.6) zone = currentLang === 'ta' ? "நேராக" : "right ahead";
-                else if (relX < 0.8) zone = currentLang === 'ta' ? "வலப்பக்கம்" : "right";
-                else zone = currentLang === 'ta' ? "மிகவும் வலப்பக்கம்" : "far right";
-
                 // Initialize or update tracking
                 if (!detectionHistoryRef.current.has(className)) {
                     detectionHistoryRef.current.set(className, {
@@ -197,46 +176,36 @@ const CameraView = ({ lang, onIntroEnd }) => {
                         lastBbox: [x, y, width, height],
                         motion: 'static',
                         distance: 'far',
-                        zone: zone,
                         score: score
                     });
                 }
 
                 const history = detectionHistoryRef.current.get(className);
                 const prevBbox = history.lastBbox;
-
-                // SMOOTHING: Simple weighted average for bbox to reduce jitter
-                history.lastBbox = [
-                    prevBbox[0] * 0.7 + x * 0.3,
-                    prevBbox[1] * 0.7 + y * 0.3,
-                    prevBbox[2] * 0.7 + width * 0.3,
-                    prevBbox[3] * 0.7 + height * 0.3
-                ];
-
                 history.score = score;
-                history.zone = zone;
 
-                // A. Stability Check
+                // A. Stability Check & Multi-frame confirmation
                 const dx = Math.abs(centerX - (prevBbox[0] + prevBbox[2] / 2));
                 const dy = Math.abs(centerY - (prevBbox[1] + prevBbox[3] / 2));
-                const isStable = dx < 60 && dy < 60;
+                const isStable = dx < 50 && dy < 50;
 
                 if (isStable) history.count = Math.min(history.count + 1, 5);
                 else history.count = Math.max(0, history.count - 1);
 
-                // B. Motion Detection (Dynamic scaling)
+                // B. Motion Detection
                 const areaDiff = areaRatio - (prevBbox[2] * prevBbox[3]) / (videoWidth * videoHeight);
-                if (areaDiff > 0.025) history.motion = 'approaching';
-                else if (dx > 40) history.motion = 'lateral';
+                if (areaDiff > 0.03) history.motion = 'approaching';
+                else if (dx > 30) history.motion = 'lateral';
                 else history.motion = 'static';
 
                 // C. Distance & Urgency
                 let urgency = 'low';
                 let distance = 'far';
-                if (areaRatio > 0.4) { distance = 'very close'; urgency = 'high'; }
-                else if (areaRatio > 0.15) { distance = 'near'; urgency = 'medium'; }
+                if (areaRatio > 0.35) { distance = 'very close'; urgency = 'high'; }
+                else if (areaRatio > 0.12) { distance = 'near'; urgency = 'medium'; }
 
                 history.lastSeen = currentTime;
+                history.lastBbox = [x, y, width, height];
                 history.distance = distance;
                 history.urgency = urgency;
 
@@ -292,52 +261,58 @@ const CameraView = ({ lang, onIntroEnd }) => {
                 (currentLang === 'ta' ? 'இடப்பக்கம் செல்லவும்' : 'Move left');
 
             for (const [className, data] of historyMap.entries()) {
-                if (currentTime - data.lastSeen > 1200) {
+                if (currentTime - data.lastSeen > 1000) {
                     data.count = 0;
                     historyMap.delete(className);
                     continue;
                 }
 
-                if (data.count >= 2) { // Faster confirmation for better feeling
+                if (data.count >= 3) {
                     const timeSinceLast = currentTime - data.lastAnnounced;
                     const isApproaching = data.motion === 'approaching';
                     const isNewUrgency = data.urgency !== data.prevUrgency;
                     const score = data.score;
 
-                    // COLLISION RISK: Critical priority
-                    if (data.urgency === 'high' && isApproaching && timeSinceLast > 1200) {
-                        const warning = currentLang === 'ta' ? "நில்லுங்கள். ஆபத்து." : "Stop. Danger ahead.";
+                    // COLLISION RISK: Highest priority interrupt
+                    if (data.urgency === 'high' && isApproaching && timeSinceLast > 1500) {
+                        const warning = currentLang === 'ta' ? "எச்சரிக்கை. உடனே நிற்கவும்." : "Warning. Stop immediately.";
                         speak(warning, currentLang, 'high');
                         data.lastAnnounced = currentTime;
                         data.prevUrgency = data.urgency;
                         continue;
                     }
 
-                    // Announcement Debounce
-                    const debounce = data.urgency === 'high' ? 2500 : 4500;
+                    // Standard announcement pacing
+                    const debounce = data.urgency === 'high' ? 3000 : 5000;
 
                     if (timeSinceLast > debounce || isNewUrgency) {
                         let text = "";
-                        const dir = data.zone;
+                        const relX = (data.lastBbox[0] + data.lastBbox[2] / 2) / videoWidth;
+                        const dir = relX < 0.35 ? (currentLang === 'ta' ? "இடப்பக்கம்" : "left") : (relX > 0.65 ? (currentLang === 'ta' ? "வலப்பக்கம்" : "right") : (currentLang === 'ta' ? "முன்னால்" : "ahead"));
 
-                        // TIER 1: Clear Object (High Confidence)
-                        if (score >= 0.7) {
+                        // TIER 1: High Confidence (>= 0.75)
+                        if (score >= 0.75) {
                             const name = translations[currentLang][className] || className;
-                            const action = data.urgency === 'high' ? (currentLang === 'ta' ? 'கவனமாக இருக்கவும்' : 'Be very careful') : recommendedAction;
+                            const action = data.urgency === 'high' ? (currentLang === 'ta' ? 'மெதுவாக நடக்கவும்' : 'Walk slowly') : recommendedAction;
 
                             if (currentLang === 'ta') {
                                 text = `${dir} ${name} உள்ளது. ${action}.`;
                             } else {
-                                text = `${name} is ${dir}. ${action}.`;
+                                text = `${name} ${dir}. ${action}.`;
                             }
                         }
-                        // TIER 2: Probable Obstacle
-                        else if (score >= 0.5) {
+                        // TIER 2: Medium Confidence (0.55 - 0.74)
+                        else if (score >= 0.55) {
+                            const action = recommendedAction;
                             if (currentLang === 'ta') {
-                                text = `${dir} ஏதோ ஒரு தடை உள்ளது. ${recommendedAction}.`;
+                                text = `${dir} தடை உள்ளது. ${action}.`;
                             } else {
-                                text = `Something is at your ${dir}. ${recommendedAction}.`;
+                                text = `Obstacle detected ${dir}. ${action}.`;
                             }
+                        }
+                        // TIER 3: Low Confidence (< 0.55)
+                        else if (data.urgency === 'high') {
+                            text = currentLang === 'ta' ? `எச்சரிக்கை. மிக அருகில் தடை உள்ளது. தயவுசெய்து நிற்கவும்.` : `Warning. Obstacle very close. Stop.`;
                         }
 
                         if (text) {
@@ -348,8 +323,6 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     }
                 }
             }
-        } catch (err) {
-            console.error("Detection loop error:", err);
         }
         requestAnimationFrame(detect);
     }, [model, environment]);
@@ -408,7 +381,24 @@ const CameraView = ({ lang, onIntroEnd }) => {
                 </div>
             )}
 
-            {/* Loader Removed for instant camera view */}
+            {!model && (
+                <div className="glass" style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    padding: '3.5rem',
+                    borderRadius: '2.5rem',
+                    textAlign: 'center',
+                    border: '2px solid var(--primary)',
+                    boxShadow: '0 0 60px rgba(255, 31, 31, 0.2)'
+                }}>
+                    <h2 style={{ marginBottom: '2rem', color: 'var(--primary)', letterSpacing: '0.25em', fontSize: '1.2rem' }}>
+                        {lang === 'en' ? 'INITIALIZING AI' : 'பார்வை தொடங்குகிறது'}
+                    </h2>
+                    <div className="loader"></div>
+                </div>
+            )}
             {cameraError && (
                 <div className="glass" style={{
                     position: 'absolute',
