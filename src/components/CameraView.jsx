@@ -30,24 +30,18 @@ const CameraView = ({ lang, onIntroEnd }) => {
         const loadModel = async () => {
             try {
                 await tf.ready();
-                // Set backend to webgl for maximum speed, then load model
                 if (tf.getBackend() !== 'webgl') {
                     await tf.setBackend('webgl').catch(() => tf.setBackend('cpu'));
                 }
                 const loadedModel = await cocossd.load({ base: 'lite_mobilenet_v2' });
                 setModel(loadedModel);
-
-                // Warm-up prediction (Smaller size for faster load on mobile)
-                const dummy = tf.zeros([1, 160, 160, 3]);
-                await loadedModel.detect(dummy);
-                dummy.dispose();
-                console.log("AI Model warmed up and ready.");
+                console.log("AI ready.");
             } catch (err) {
-                console.error("Failed to load model:", err);
+                console.error("Model error:", err);
             }
         };
         loadModel();
-    }, []); // Only load model once
+    }, []);
 
     useEffect(() => {
         if (model && !hasSpokenIntroRef.current) {
@@ -62,48 +56,27 @@ const CameraView = ({ lang, onIntroEnd }) => {
         const startCamera = async () => {
             if (!videoRef.current) return;
 
-            // Check for Secure Context (Required for camera)
-            if (!window.isSecureContext && window.location.hostname !== 'localhost' && !window.location.hostname.startsWith('127.')) {
-                setCameraError("Secure context (HTTPS) required for camera access. If testing locally, use localhost or HTTPS.");
-                return;
-            }
-
+            // Simplified constraints for ultra-fast startup
             const constraintOptions = [
-                // Use slightly lower resolution (480x360) for much faster processing on mobile
-                { video: { facingMode: 'environment', width: { ideal: 480 }, height: { ideal: 360 } }, audio: false },
-                { video: { width: { ideal: 480 }, height: { ideal: 360 } }, audio: false },
+                { video: { facingMode: 'environment', width: 480, height: 360 }, audio: false },
                 { video: true, audio: false }
             ];
 
             for (const options of constraintOptions) {
                 try {
-                    console.log("Attempting camera with options:", options);
                     const stream = await navigator.mediaDevices.getUserMedia(options);
                     if (videoRef.current) {
                         videoRef.current.srcObject = stream;
-
-                        // Force play and ensure it's playing
-                        await new Promise((resolve, reject) => {
-                            if (!videoRef.current) return reject();
-                            videoRef.current.onloadedmetadata = () => {
-                                videoRef.current.play()
-                                    .then(resolve)
-                                    .catch(err => {
-                                        console.warn("Autoplay blocked, waiting for user gesture", err);
-                                        resolve(); // Resolve anyway, App.jsx handles the click-to-play
-                                    });
-                            };
-                        });
-
+                        // Fast play
+                        videoRef.current.play().catch(e => console.warn("Autoplay wait", e));
                         setCameraError(null);
-                        console.log("Camera started successfully");
                         return;
                     }
                 } catch (err) {
-                    console.warn(`Failed with options:`, options, err.name, err.message);
+                    console.warn("Cam retry", options, err.name);
                 }
             }
-            setCameraError("Could not access camera. Please check permissions and ensure you are using HTTPS.");
+            setCameraError("Camera failed. Check permissions & HTTPS.");
         };
 
         startCamera();

@@ -64,7 +64,7 @@ export const speak = (text, lang = 'en-US', priority = 'normal', onEnd = null) =
         const utterance = new SpeechSynthesisUtterance(finalText);
         utterance.voice = selectedVoice;
         utterance.lang = selectedVoice ? selectedVoice.lang : finalLang;
-        utterance.rate = 1.05; // Slightly faster for better UX
+        utterance.rate = 1.1; // Faster for quick loading feel
         utterance.pitch = 1.0;
 
         currentUtterance = utterance;
@@ -187,8 +187,8 @@ export const translations = {
         pothole: "Pothole",
         drain: "Drain",
         obstacle: "Obstacle",
-        warning_close: "Warning! Obstacle very close. Please stop.",
-        welcome: "Hello. VisionAid is now active. The camera is scanning your surroundings. I will guide you by speaking about obstacles and safe paths. Please walk slowly."
+        warning_close: "Stop. Obstacle ahead.",
+        welcome: "VisionAid is active."
     },
     ta: {
         person: "நபர்",
@@ -245,7 +245,7 @@ export const translations = {
         pothole: "பள்ளம்",
         drain: "சாக்கடை",
         obstacle: "தடை",
-        warning_close: "எச்சரிக்கை! முன்னால் தடை உள்ளது. தயவுசெய்து நிற்கவும்.",
-        welcome: "வணக்கம். VisionAid உதவி அமைப்பு தொடங்கப்பட்டுள்ளது. கேமரா சுற்றுப்புறத்தை கண்காணிக்கிறது. முன்னால் உள்ள தடைகள் மற்றும் பாதுகாப்பான பாதையை நான் குரலில் தெரிவிப்பேன். தயவுசெய்து மெதுவாக நடக்கவும்."
+        warning_close: "நில்லுங்கள். தடை உள்ளது.",
+        welcome: "VisionAid தயாராக உள்ளது."
     }
 };
