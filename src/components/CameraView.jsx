@@ -408,24 +408,7 @@ const CameraView = ({ lang, onIntroEnd }) => {
                 </div>
             )}
 
-            {!model && (
-                <div className="glass" style={{
-                    position: 'absolute',
-                    top: '50%',
-                    left: '50%',
-                    transform: 'translate(-50%, -50%)',
-                    padding: '3.5rem',
-                    borderRadius: '2.5rem',
-                    textAlign: 'center',
-                    border: '2px solid var(--primary)',
-                    boxShadow: '0 0 60px rgba(255, 31, 31, 0.2)'
-                }}>
-                    <h2 style={{ marginBottom: '2rem', color: 'var(--primary)', letterSpacing: '0.25em', fontSize: '1.2rem' }}>
-                        {lang === 'en' ? 'INITIALIZING AI' : 'பார்வை தொடங்குகிறது'}
-                    </h2>
-                    <div className="loader"></div>
-                </div>
-            )}
+            {/* Loader Removed for instant camera view */}
             {cameraError && (
                 <div className="glass" style={{
                     position: 'absolute',

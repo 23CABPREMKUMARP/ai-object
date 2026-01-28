@@ -76,21 +76,7 @@ function App() {
       </div>
 
       {/* 3D Hero Element */}
-      <div className="hero-visual">
-        <div className="detection-waves">
-          <div className="wave"></div>
-          <div className="wave"></div>
-          <div className="wave"></div>
-        </div>
-        <div className="camera-3d rotate-3d">
-          <div className="camera-lens"></div>
-        </div>
-        <div className="glass hero-status-pill" style={{ padding: '0.8rem 2.5rem', borderRadius: '2rem', border: '1.5px solid var(--primary)' }}>
-          <span style={{ fontSize: '0.95rem', fontWeight: 800, letterSpacing: '0.2em', color: '#fff' }}>
-            SCANNING...
-          </span>
-        </div>
-      </div>
+      {/* 3D Hero Element Removed for Performance */}
 
       {/* HUD Decorations */}
       <div className="hud-corner top-left" />
