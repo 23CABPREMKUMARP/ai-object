@@ -1,96 +1,100 @@
 // Keep track of the current listener to avoid duplicates
 let voicesListener = null;
 
-// Global reference to prevent GC (Chrome bug fix)
 let currentUtterance = null;
-let lastSpeakTime = 0;
+let isSpeakingLocked = false;
+let speechQueue = [];
 
-export const speak = (text, lang = 'en-US') => {
+export const speak = (text, lang = 'en-US', priority = 'normal', onEnd = null) => {
     if (!('speechSynthesis' in window)) return;
 
-    // Fix: If we switch languages, force a hard cancel to prevent queue mix-ups
-    const now = Date.now();
-    if (window.speechSynthesis.speaking && (now - lastSpeakTime < 1000) && !text.includes('Warning') && !text.includes('voice not found')) {
+    const isUrgent = text.includes('Warning') || text.includes('Stop') || priority === 'high';
+
+    // 1. Interrupt ONLY if urgent and speaking isn't locked by another urgent message
+    if (isUrgent && window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+        speechQueue = []; // Clear queue for urgent messages
+        isSpeakingLocked = false;
+    } else if (window.speechSynthesis.speaking || isSpeakingLocked) {
+        // Prevent duplicate queuing of the same message within a short time
+        if (speechQueue.some(item => item.text === text)) return;
+
+        // Don't queue more than 2 messages to avoid backlog
+        if (speechQueue.length < 2) {
+            speechQueue.push({ text, lang, priority, onEnd });
+        }
         return;
     }
 
-    window.speechSynthesis.cancel();
-    lastSpeakTime = now;
-
-    setTimeout(() => {
-        const doSpeak = () => {
-            const voices = window.speechSynthesis.getVoices();
-            if (voices.length === 0) return;
-
-            // 1. SELECT VOICE FIRST
-            let selectedVoice = null;
-            let finalLang = lang === 'ta' ? 'ta-IN' : 'en-IN';
-            let finalText = text;
-
-            if (lang === 'ta') {
-                // Try to find a REAL Tamil voice
-                const tamilVoice = voices.find(v =>
-                    v.lang.toLowerCase().includes('ta') ||
-                    v.name.toLowerCase().includes('tamil')
-                );
-
-                if (tamilVoice) {
-                    selectedVoice = tamilVoice;
-                    // Prefer female if multiple exist
-                    const femaleTamil = voices.find(v =>
-                        (v.lang.toLowerCase().includes('ta') || v.name.toLowerCase().includes('tamil')) &&
-                        (v.name.toLowerCase().includes('vani') || v.name.toLowerCase().includes('female'))
-                    );
-                    if (femaleTamil) selectedVoice = femaleTamil;
-                } else {
-                    // CRITICAL FIX: If no Tamil voice exists, DO NOT try to speak Tamil text with an English voice.
-                    // It causes the engine to hang/stuck.
-                    console.warn("No Tamil voice found. Falling back to English.");
-                    finalText = "Tamil voice missing. Please install Vani voice in Mac Accessibility Settings.";
-                    finalLang = 'en-IN';
-
-                    // Pick best English Indian voice
-                    const indianVoice = voices.find(v =>
-                        v.lang.toLowerCase().includes('en-in') ||
-                        v.lang.toLowerCase().includes('hi-in')
-                    );
-                    selectedVoice = indianVoice || voices.find(v => v.lang.includes('en'));
-                }
-            } else {
-                // English selection
-                selectedVoice = voices.find(v =>
-                    v.lang.toLowerCase().includes('en-in') &&
-                    (v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('female'))
-                ) || voices.find(v => v.lang.includes('en'));
+    const doSpeak = () => {
+        const voices = window.speechSynthesis.getVoices();
+        if (voices.length === 0) {
+            // Wait for voices if not ready
+            if (!voicesListener) {
+                voicesListener = () => {
+                    doSpeak();
+                    window.speechSynthesis.removeEventListener('voiceschanged', voicesListener);
+                    voicesListener = null;
+                };
+                window.speechSynthesis.addEventListener('voiceschanged', voicesListener);
             }
+            return;
+        }
 
-            // 2. CONFIGURE UTTERANCE
-            const utterance = new SpeechSynthesisUtterance(finalText);
-            utterance.voice = selectedVoice;
-            utterance.lang = selectedVoice ? selectedVoice.lang : finalLang;
-            utterance.rate = 0.9;
-            utterance.pitch = 1.0;
+        let selectedVoice = null;
+        let finalLang = lang === 'ta' ? 'ta-IN' : 'en-IN';
+        let finalText = text;
 
-            // Store reference to prevent GC
-            currentUtterance = utterance;
-            utterance.onend = () => { if (currentUtterance === utterance) currentUtterance = null; };
-            utterance.onerror = (e) => { console.error("Speech error:", e); };
+        if (lang === 'ta') {
+            const tamilVoice = voices.find(v => v.lang.toLowerCase().includes('ta') || v.name.toLowerCase().includes('tamil'));
+            if (tamilVoice) {
+                selectedVoice = tamilVoice;
+                const femaleTamil = voices.find(v => (v.lang.toLowerCase().includes('ta')) && (v.name.toLowerCase().includes('vani') || v.name.toLowerCase().includes('female')));
+                if (femaleTamil) selectedVoice = femaleTamil;
+            } else {
+                finalText = "Tamil voice missing.";
+                finalLang = 'en-IN';
+                selectedVoice = voices.find(v => v.lang.toLowerCase().includes('en-in')) || voices.find(v => v.lang.includes('en'));
+            }
+        } else {
+            selectedVoice = voices.find(v => v.lang.toLowerCase().includes('en-in') && (v.name.toLowerCase().includes('rishi') || v.name.toLowerCase().includes('female')))
+                || voices.find(v => v.lang.includes('en'));
+        }
 
-            window.speechSynthesis.speak(utterance);
+        const utterance = new SpeechSynthesisUtterance(finalText);
+        utterance.voice = selectedVoice;
+        utterance.lang = selectedVoice ? selectedVoice.lang : finalLang;
+        utterance.rate = 0.95;
+        utterance.pitch = 1.0;
+
+        currentUtterance = utterance;
+        isSpeakingLocked = true;
+
+        utterance.onend = () => {
+            isSpeakingLocked = false;
+            if (currentUtterance === utterance) currentUtterance = null;
+
+            // Execute callback
+            if (onEnd) onEnd();
+
+            // Process next in queue
+            if (speechQueue.length > 0) {
+                const next = speechQueue.shift();
+                speak(next.text, next.lang, next.priority, next.onEnd);
+            }
         };
 
-        if (window.speechSynthesis.getVoices().length > 0) {
-            doSpeak();
-        } else {
-            if (voicesListener) window.speechSynthesis.removeEventListener('voiceschanged', voicesListener);
-            voicesListener = () => {
-                doSpeak();
-                window.speechSynthesis.removeEventListener('voiceschanged', voicesListener);
-                voicesListener = null;
-            };
-            window.speechSynthesis.addEventListener('voiceschanged', voicesListener);
-        }
-    }, 50);
+        utterance.onerror = (e) => {
+            console.error("Speech error:", e);
+            isSpeakingLocked = false;
+            currentUtterance = null;
+            if (onEnd) onEnd();
+        };
+
+        window.speechSynthesis.speak(utterance);
+    };
+
+    doSpeak();
 };
 
 export const translations = {
@@ -175,8 +179,16 @@ export const translations = {
         'teddy bear': "Teddy bear",
         'hair drier': "Hair drier",
         toothbrush: "Toothbrush",
+        stairs: "Stairs",
+        door: "Door",
+        pole: "Pole",
+        wall: "Wall",
+        pit: "Pit",
+        pothole: "Pothole",
+        drain: "Drain",
+        obstacle: "Obstacle",
         warning_close: "Warning! Obstacle very close. Please stop.",
-        welcome: "AI Navigation System Started. Tap anywhere to change language."
+        welcome: "Hello. VisionAid is now active. The camera is scanning your surroundings. I will guide you by speaking about obstacles and safe paths. Please walk slowly."
     },
     ta: {
         person: "நபர்",
@@ -225,7 +237,15 @@ export const translations = {
         vase: "பூச்சாடி",
         scissors: "கத்தரிக்கோல்",
         toothbrush: "பல் துலக்கி",
+        stairs: "படிக்கட்டு",
+        door: "கதவு",
+        pole: "தூண்",
+        wall: "சுவர்",
+        pit: "குழி",
+        pothole: "பள்ளம்",
+        drain: "சாக்கடை",
+        obstacle: "தடை",
         warning_close: "எச்சரிக்கை! முன்னால் தடை உள்ளது. தயவுசெய்து நிற்கவும்.",
-        welcome: "AI வழிசெலுத்தல் அமைப்பு தொடங்கியது. மொழியை மாற்ற எங்கு வேண்டுமானாலும் தட்டவும்."
+        welcome: "வணக்கம். VisionAid உதவி அமைப்பு தொடங்கப்பட்டுள்ளது. கேமரா சுற்றுப்புறத்தை கண்காணிக்கிறது. முன்னால் உள்ள தடைகள் மற்றும் பாதுகாப்பான பாதையை நான் குரலில் தெரிவிப்பேன். தயவுசெய்து மெதுவாக நடக்கவும்."
     }
 };

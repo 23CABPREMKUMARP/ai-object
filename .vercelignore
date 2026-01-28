@@ -1,0 +1,6 @@
+node_modules
+dist
+.git
+README.md
+INSTRUCTIONS_TAMIL_VOICE.md
+eslint.config.js
