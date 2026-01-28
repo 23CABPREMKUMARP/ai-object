@@ -61,32 +61,50 @@ const CameraView = ({ lang, onIntroEnd }) => {
             if (!videoRef.current) return;
 
             // Check for Secure Context (Required for camera)
-            if (!window.isSecureContext && window.location.hostname !== 'localhost') {
-                setCameraError("Secure context (HTTPS) required for camera access.");
+            if (!window.isSecureContext && window.location.hostname !== 'localhost' && !window.location.hostname.startsWith('127.')) {
+                setCameraError("Secure context (HTTPS) required for camera access. If testing locally, use localhost or HTTPS.");
                 return;
             }
 
             const constraintOptions = [
-                { video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
-                { video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+                // Priority 1: High quality back camera
+                { video: { facingMode: { exact: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                // Priority 2: Generic back camera
+                { video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+                // Priority 3: Any camera
+                { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
                 { video: true, audio: false }
             ];
 
             for (const options of constraintOptions) {
                 try {
+                    console.log("Attempting camera with options:", options);
                     const stream = await navigator.mediaDevices.getUserMedia(options);
                     if (videoRef.current) {
                         videoRef.current.srcObject = stream;
-                        await videoRef.current.play();
+
+                        // Force play and ensure it's playing
+                        await new Promise((resolve, reject) => {
+                            if (!videoRef.current) return reject();
+                            videoRef.current.onloadedmetadata = () => {
+                                videoRef.current.play()
+                                    .then(resolve)
+                                    .catch(err => {
+                                        console.warn("Autoplay blocked, waiting for user gesture", err);
+                                        resolve(); // Resolve anyway, App.jsx handles the click-to-play
+                                    });
+                            };
+                        });
+
                         setCameraError(null);
                         console.log("Camera started successfully");
                         return;
                     }
                 } catch (err) {
-                    console.warn(`Failed with options:`, options, err);
+                    console.warn(`Failed with options:`, options, err.name, err.message);
                 }
             }
-            setCameraError("Camera access denied. Please enable camera in settings.");
+            setCameraError("Could not access camera. Please check permissions and ensure you are using HTTPS.");
         };
 
         startCamera();
@@ -100,19 +118,28 @@ const CameraView = ({ lang, onIntroEnd }) => {
     }, []);
 
     const detect = useCallback(async () => {
-        if (model && videoRef.current && videoRef.current.readyState === 4) {
+        if (!model || !videoRef.current || !canvasRef.current) return;
+
+        // Ensure video is ready and playing
+        if (videoRef.current.readyState < 2 || videoRef.current.paused) {
+            requestAnimationFrame(detect);
+            return;
+        }
+
+        try {
             const video = videoRef.current;
             const videoWidth = video.videoWidth;
             const videoHeight = video.videoHeight;
 
-            videoRef.current.width = videoWidth;
-            videoRef.current.height = videoHeight;
-            canvasRef.current.width = videoWidth;
-            canvasRef.current.height = videoHeight;
+            // Sync buffer sizes
+            if (video.width !== videoWidth) video.width = videoWidth;
+            if (video.height !== videoHeight) video.height = videoHeight;
+            if (canvasRef.current.width !== videoWidth) canvasRef.current.width = videoWidth;
+            if (canvasRef.current.height !== videoHeight) canvasRef.current.height = videoHeight;
 
-            // 1. GET DETECTIONS WITH LOW CONFIDENCE TOLERANCE
+            // 1. GET DETECTIONS
             const detections = await model.detect(video);
-            const ctx = canvasRef.current.getContext('2d');
+            const ctx = canvasRef.current.getContext('2d', { alpha: true });
             ctx.clearRect(0, 0, videoWidth, videoHeight);
 
             const currentTime = Date.now();
@@ -336,6 +363,8 @@ const CameraView = ({ lang, onIntroEnd }) => {
                     }
                 }
             }
+        } catch (err) {
+            console.error("Detection loop error:", err);
         }
         requestAnimationFrame(detect);
     }, [model, environment]);
